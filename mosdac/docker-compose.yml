@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # Neo4j Database
+  neo4j:
+    image: neo4j:5.14.1
+    container_name: mosdac-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/mosdac123
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_dbms_memory_pagecache_size=512m
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    networks:
+      - mosdac-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7474"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache (optional, for future use)
+  redis:
+    image: redis:7-alpine
+    container_name: mosdac-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mosdac-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MOSDAC AI Help Bot
+  mosdac-ai-bot:
+    build: .
+    container_name: mosdac-ai-bot
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=mosdac123
+      - REDIS_URL=redis://redis:6379
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"  # FastAPI backend
+      - "8501:8501"  # Streamlit frontend
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./.env:/app/.env
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mosdac-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx Reverse Proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: mosdac-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - mosdac-ai-bot
+    networks:
+      - mosdac-network
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
+  neo4j_plugins:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  mosdac-network:
+    driver: bridge
+
+# Optional: Add monitoring services
+#  prometheus:
+#    image: prom/prometheus:latest
+#    container_name: mosdac-prometheus
+#    ports:
+#      - "9090:9090"
+#    volumes:
+#      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#    networks:
+#      - mosdac-network
+#
+#  grafana:
+#    image: grafana/grafana:latest
+#    container_name: mosdac-grafana
+#    ports:
+#      - "3000:3000"
+#    environment:
+#      - GF_SECURITY_ADMIN_PASSWORD=admin
+#    volumes:
+#      - grafana_data:/var/lib/grafana
+#    networks:
+#      - mosdac-network
+#    depends_on:
+#      - prometheus
+#
+# volumes:
+#   grafana_data:
+#     driver: local
